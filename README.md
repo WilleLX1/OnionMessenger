@@ -34,18 +34,24 @@ Hosts encrypted messenger platform on a .onion link, simple user signup and assi
 
 ```bash
 git clone https://github.com/<user>/OnionMessenger.git
-cd OnionMessenger
+cd OnionMessenger/server
 npm install
 ```
 
 ## Running the service
 
 1. Start Tor locally and configure a hidden service that forwards to the server's port.
-2. Launch the application:
+2. Launch the application from the `server/` directory:
 
 ```bash
-npm start
+JWT_SECRET=your-secret npm start
 ```
 
 3. Access the service via the generated `.onion` address using the Tor Browser.
+
+
+## Environment variables
+
+- `JWT_SECRET`: Secret key used to sign authentication tokens. **Required**.
+- `PORT`: Port for the HTTP server. Defaults to `3000`.
 
