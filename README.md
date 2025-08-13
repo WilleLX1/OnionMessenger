@@ -36,7 +36,10 @@ Hosts encrypted messenger platform on a .onion link, simple user signup and assi
 git clone https://github.com/<user>/OnionMessenger.git
 cd OnionMessenger/server
 npm install
+cp .env.example .env   # on Windows use: copy .env.example .env
 ```
+
+Edit the newly created `.env` file and provide your own secret values.
 
 ## Running the service
 
@@ -44,7 +47,15 @@ npm install
 2. Launch the application from the `server/` directory:
 
 ```bash
-JWT_SECRET=your-secret npm start
+npm start
+```
+
+Environment variables from `.env` are loaded automatically. If you prefer to set them manually on Windows PowerShell use:
+
+```powershell
+$env:JWT_SECRET="your-secret"
+$env:MESSAGE_SECRET="your-msg-secret"
+npm start
 ```
 
 3. Access the service via the generated `.onion` address using the Tor Browser.
@@ -53,5 +64,6 @@ JWT_SECRET=your-secret npm start
 ## Environment variables
 
 - `JWT_SECRET`: Secret key used to sign authentication tokens. **Required**.
+- `MESSAGE_SECRET`: Key used to encrypt stored messages. **Required**.
 - `PORT`: Port for the HTTP server. Defaults to `3000`.
 
