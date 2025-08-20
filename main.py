@@ -18,7 +18,6 @@ from datetime import datetime, timezone
 def find_tor_binary():
     candidates = ["tor"]
     if os.name == "nt":
-        # Try local bundled tor (./tor/tor.exe) or PATH
         candidates = ["tor.exe", os.path.join(os.getcwd(), "tor", "tor.exe")]
     for c in candidates:
         tor = shutil.which(os.path.expandvars(c))
@@ -48,14 +47,23 @@ def save_json(path, obj):
 class Store:
     """
     Persistent JSON store.
-      users:    {"<id>": {"created_at": "...", "pub": "<RSA-SPKI-b64>" }}
-      contacts: {"<owner_id>": ["<contact_id>", ...]}
-      messages: [
-         {
-           "id":1,"from":"A","to":"B","ts":"...",
-           "ct":"...","iv":"...","ek_to":"...","ek_from":"..."
-         }, ...
-      ]
+
+    users: {
+      "<id>": {
+        "created_at": "...",
+        "pub": "<RSA-SPKI-b64>",     # encryption public key (RSA-OAEP)
+        "sign": { "alg": "Ed25519"|"ECDSA-P256", "pub": "<b64>" }  # signing pubkey
+      }
+    }
+
+    messages: [
+      {
+        "id":1,"from":"A","to":"B","ts":"...",
+        "ct":"<b64>","iv":"<b64>","ek_to":"<b64>","ek_from":"<b64>",
+        "sig":"<b64>","sig_alg":"Ed25519"|"ECDSA-P256",
+        "nonce":"<b64>","client_ts":"..."
+      }, ...
+    ]
     """
     def __init__(self, datadir: Path):
         self.lock = threading.RLock()
@@ -69,13 +77,11 @@ class Store:
         self.contacts = load_json(self.contacts_path, {})
         self.messages = load_json(self.messages_path, [])
 
-        # Compute next_id from existing messages (backwards compatible)
         if self.messages:
             self.next_id = 1 + max(int(m.get("id", 0)) for m in self.messages)
         else:
             self.next_id = 1
 
-    # ---- persist everything
     def persist(self):
         with self.lock:
             save_json(self.users_path, self.users)
@@ -84,33 +90,26 @@ class Store:
 
     # ---- users
     def gen_id(self, n=14):
-        # URL/typing-friendly alphabet without lookalikes
         alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
         import secrets
         return "".join(secrets.choice(alphabet) for _ in range(n))
 
-    def signup(self, pub=None):
+    def signup(self, pub=None, sign=None):
         with self.lock:
             while True:
                 uid = self.gen_id()
                 if uid not in self.users:
                     break
-            self.users[uid] = {"created_at": now_iso(), "pub": pub}
+            self.users[uid] = {"created_at": now_iso(), "pub": pub, "sign": sign}
             self.persist()
             return uid
 
-    def set_pub(self, uid, pub):
-        with self.lock:
-            if uid in self.users:
-                self.users[uid]["pub"] = pub
-                self.persist()
-                return True
-            return False
-
-    def get_pub(self, uid):
+    def get_user_keys(self, uid):
         with self.lock:
             u = self.users.get(uid)
-            return u.get("pub") if u else None
+            if not u:
+                return None
+            return {"pub": u.get("pub"), "sign": u.get("sign")}
 
     def valid_user(self, uid):
         with self.lock:
@@ -133,8 +132,8 @@ class Store:
             return list(self.contacts.get(owner, []))
 
     # ---- messages (E2EE blobs only)
-    def send(self, from_id, to_id, ct, iv, ek_to, ek_from):
-        if not (ct and iv and ek_to and ek_from):
+    def send(self, from_id, to_id, ct, iv, ek_to, ek_from, sig, sig_alg, nonce, client_ts):
+        if not (ct and iv and ek_to and ek_from and sig and sig_alg and nonce and client_ts):
             return False
         with self.lock:
             if from_id not in self.users or to_id not in self.users:
@@ -145,10 +144,14 @@ class Store:
                 "id": mid,
                 "from": from_id,
                 "to": to_id,
-                "ct": ct,           # ciphertext (base64)
-                "iv": iv,           # AES-GCM IV (base64)
-                "ek_to": ek_to,     # AES key wrapped to recipient's pub (base64)
-                "ek_from": ek_from, # AES key wrapped to sender's pub (base64)
+                "ct": ct,
+                "iv": iv,
+                "ek_to": ek_to,
+                "ek_from": ek_from,
+                "sig": sig,
+                "sig_alg": sig_alg,
+                "nonce": nonce,
+                "client_ts": client_ts,
                 "ts": now_iso()
             })
             self.persist()
@@ -176,12 +179,10 @@ class Store:
 # HTTP Handler (API + static)
 # ---------------------------
 class Handler(http.server.SimpleHTTPRequestHandler):
-    # directory will be injected in the server factory
     def __init__(self, *args, store: Store = None, **kwargs):
         self.store = store
         super().__init__(*args, directory=str(self.directory), **kwargs)
 
-    # Routes
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
@@ -190,8 +191,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             qs = urllib.parse.parse_qs(parsed.query)
             uid = (qs.get("user_id") or [""])[0]
             contacts = self.store.get_contacts(uid) if self.store.valid_user(uid) else []
-            self._json({"contacts": contacts})
-            return
+            return self._json({"contacts": contacts})
 
         if path in ("/api/thread", "/api/thread_lp"):
             qs = urllib.parse.parse_qs(parsed.query)
@@ -201,30 +201,25 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             since_id = (qs.get("since_id") or [None])[0]
             since_id = int(since_id) if since_id not in (None, "", []) else None
             if not (self.store.valid_user(uid) and self.store.valid_user(pid)):
-                self._status(400, {"error": "invalid user/peer"})
-                return
+                return self._status(400, {"error": "invalid user/peer"})
 
             if path == "/api/thread":
                 msgs = self.store.thread(uid, pid, since_iso=since, since_id=since_id)
-                self._json({"messages": msgs})
-                return
+                return self._json({"messages": msgs})
             else:
                 msgs = self._longpoll_thread(uid, pid, since, since_id, timeout_s=25, interval=0.5)
-                self._json({"messages": msgs})
-                return
+                return self._json({"messages": msgs})
 
         if path == "/api/pubkey":
             qs = urllib.parse.parse_qs(parsed.query)
             uid = (qs.get("user_id") or [""])[0]
-            pub = self.store.get_pub(uid)
-            if pub:
-                self._json({"pub": pub})
+            keys = self.store.get_user_keys(uid)
+            if keys and keys.get("pub"):
+                return self._json({"pub": keys["pub"], "sign": keys.get("sign")})
             else:
-                self._status(404, {"error": "not found"})
-            return
+                return self._status(404, {"error": "not found"})
 
         if path == "/favicon.ico":
-            # 1x1 transparent PNG
             import base64
             png = base64.b64decode(
                 "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGMAAQAABQABJ5mOGQAAAABJRU5ErkJggg=="
@@ -239,7 +234,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 pass
             return
 
-        # Static files from /site
         return super().do_GET()
 
     def do_POST(self):
@@ -252,38 +246,34 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             body = {}
 
         if parsed.path == "/api/signup":
-            # Expect a public key from the client (RSA SPKI base64)
             pub = body.get("pub") or body.get("pub_spki") or body.get("public_key")
-            uid = self.store.signup(pub=pub)
-            self._json({"id": uid})
-            return
+            sign = body.get("sign")  # {"alg": "...", "pub": "..."} (b64)
+            uid = self.store.signup(pub=pub, sign=sign)
+            return self._json({"id": uid})
 
         if parsed.path == "/api/add_contact":
             owner = body.get("owner_id", "")
             contact = body.get("contact_id", "")
             ok = self.store.add_contact(owner, contact)
-            if ok:
-                self._json({"ok": True})
-            else:
-                self._status(400, {"ok": False, "error": "invalid owner/contact"})
-            return
+            if ok: return self._json({"ok": True})
+            else:  return self._status(400, {"ok": False, "error": "invalid owner/contact"})
 
         if parsed.path == "/api/send":
-            # E2EE payload only
             frm = body.get("from_id", "")
             to = body.get("to_id", "")
             ct = body.get("ciphertext", "")
             iv = body.get("iv", "")
             ek_to = body.get("ek_to", "")
             ek_from = body.get("ek_from", "")
-            ok = self.store.send(frm, to, ct, iv, ek_to, ek_from)
-            if ok:
-                self._json({"ok": True})
-            else:
-                self._status(400, {"ok": False, "error": "invalid send"})
-            return
+            sig = body.get("sig", "")
+            sig_alg = body.get("sig_alg", "")
+            nonce = body.get("nonce", "")
+            client_ts = body.get("client_ts", "")
+            ok = self.store.send(frm, to, ct, iv, ek_to, ek_from, sig, sig_alg, nonce, client_ts)
+            if ok: return self._json({"ok": True})
+            else:  return self._status(400, {"ok": False, "error": "invalid send"})
 
-        self._status(404, {"error": "not found"})
+        return self._status(404, {"error": "not found"})
 
     # Helpers
     def _json(self, obj, code=200):
@@ -295,26 +285,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(payload)
         except (BrokenPipeError, ConnectionAbortedError):
-            # client went away; ignore noisy stack traces
             pass
 
     def _status(self, code, obj=None):
-        if obj is None:
-            obj = {"ok": False}
+        if obj is None: obj = {"ok": False}
         self._json(obj, code=code)
 
     def _longpoll_thread(self, uid, pid, since_iso, since_id, timeout_s=25, interval=0.5):
         t0 = time.time()
-        # Immediate try
         msgs = self.store.thread(uid, pid, since_iso=since_iso, since_id=since_id)
-        if msgs:
-            return msgs
-        # Wait for new data
+        if msgs: return msgs
         while time.time() - t0 < timeout_s:
             time.sleep(interval)
             msgs = self.store.thread(uid, pid, since_iso=since_iso, since_id=since_id)
-            if msgs:
-                return msgs
+            if msgs: return msgs
         return []
 
 # ---------------------------
@@ -358,7 +342,6 @@ def wait_for_hostname(hsdir: Path, timeout=120):
     return None
 
 def run_http(docroot: Path, port: int, store: Store):
-    # Serve static files from docroot and run a threaded server (needed for long-poll)
     class ThreadingHTTPServer(socketserver.ThreadingTCPServer):
         allow_reuse_address = True
         daemon_threads = True
@@ -375,7 +358,7 @@ def run_http(docroot: Path, port: int, store: Store):
 # Main
 # ---------------------------
 def main():
-    parser = argparse.ArgumentParser(description="Tor-hosted DM (E2EE): signup (ID+pubkey), contacts, encrypted messaging with long-poll.")
+    parser = argparse.ArgumentParser(description="Tor-hosted DM (E2EE+sign): IDs, pubkeys, encrypted+signed messaging with long-poll.")
     parser.add_argument("--docroot", type=str, default="site", help="Static folder to serve (default: ./site)")
     parser.add_argument("--port", type=int, default=8000, help="Local HTTP port (default: 8000)")
     parser.add_argument("--workdir", type=str, default=".tor_site_runtime", help="Working dir for Tor and data")
@@ -383,7 +366,7 @@ def main():
 
     tor_bin = find_tor_binary()
     if not tor_bin:
-        print("ERROR: Tor binary not found in PATH. Install Tor (Expert Bundle on Windows) and try again.")
+        print("ERROR: Tor binary not found in PATH. Install Tor (Expert Bundle on Windows).")
         sys.exit(1)
 
     workdir = Path(args.workdir).resolve()
@@ -395,7 +378,6 @@ def main():
     docroot = Path(args.docroot).resolve()
     docroot.mkdir(parents=True, exist_ok=True)
 
-    # Ensure index.html exists (user can replace)
     index_path = docroot / "index.html"
     if not index_path.exists():
         index_path.write_text("<!doctype html><meta charset='utf-8'><title>Onion DM</title><p>Upload site/index.html</p>", encoding="utf-8")
