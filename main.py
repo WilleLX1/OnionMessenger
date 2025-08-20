@@ -51,9 +51,13 @@ class Store:
     users: {
       "<id>": {
         "created_at": "...",
-        "pub": "<RSA-SPKI-b64>",     # encryption public key (RSA-OAEP)
-        "sign": { "alg": "Ed25519"|"ECDSA-P256", "pub": "<b64>" }  # signing pubkey
+        "pub": "<RSA-SPKI-b64>",
+        "sign": { "alg": "Ed25519"|"ECDSA-P256", "pub": "<b64>" }
       }
+    }
+
+    contacts: {
+      "<owner_id>": ["<peer_id>", ...]
     }
 
     messages: [
@@ -126,6 +130,18 @@ class Store:
             self.contacts[owner] = lst
             self.persist()
             return True
+
+    def remove_contact(self, owner, contact):
+        with self.lock:
+            if owner not in self.users or contact not in self.users:
+                return False
+            lst = self.contacts.get(owner, [])
+            if contact in lst:
+                lst = [c for c in lst if c != contact]
+                self.contacts[owner] = lst
+                self.persist()
+                return True
+            return False
 
     def get_contacts(self, owner):
         with self.lock:
@@ -257,6 +273,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             ok = self.store.add_contact(owner, contact)
             if ok: return self._json({"ok": True})
             else:  return self._status(400, {"ok": False, "error": "invalid owner/contact"})
+
+        if parsed.path == "/api/remove_contact":
+            owner = body.get("owner_id", "")
+            contact = body.get("contact_id", "")
+            ok = self.store.remove_contact(owner, contact)
+            if ok: return self._json({"ok": True})
+            else:  return self._status(400, {"ok": False, "error": "invalid owner/contact or not found"})
 
         if parsed.path == "/api/send":
             frm = body.get("from_id", "")

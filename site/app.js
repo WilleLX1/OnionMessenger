@@ -11,7 +11,6 @@ const utf8 = s => new TextEncoder().encode(s);
 const hex = buf => [...new Uint8Array(buf)].map(x=>x.toString(16).padStart(2,"0")).join("");
 async function sha256_hex(buf){ return hex(await crypto.subtle.digest("SHA-256", buf)); }
 function fpShort(h){ return (h||"").slice(0,32).match(/.{1,4}/g)?.join(" ") || ""; }
-
 const PREFERRED_SIG_ALG = "ECDSA-P256"; // cross-browser signatures
 
 // ================== Storage keys ==================
@@ -21,6 +20,9 @@ const SIGN_PRIV = "sign_priv_b64";
 const SIGN_PUB  = "sign_pub_b64";
 const SIGN_ALG  = "sign_alg";
 const PIN_PREFIX = "pin::";
+const NICKS_KEY = "nicknames";
+const NOTIF_DESKTOP = "notif_desktop";
+const NOTIF_SOUND   = "notif_sound";
 
 // ================== Views ==================
 const VIEWS = ["view-landing","view-login","view-export","view-app"];
@@ -38,7 +40,6 @@ async function importMyEncKeysFromStorage(){
   const pub  = await crypto.subtle.importKey("spki", b642ab(pubB64), {name:"RSA-OAEP", hash:"SHA-256"}, true, ["encrypt"]);
   return {priv, pub};
 }
-
 async function generateEncKeysAndSave(){
   const kp = await crypto.subtle.generateKey(
     {name:"RSA-OAEP", modulusLength:2048, publicExponent:new Uint8Array([1,0,1]), hash:"SHA-256"},
@@ -49,7 +50,6 @@ async function generateEncKeysAndSave(){
   localStorage.setItem(KEY_PRIV, ab2b64(pkcs8));
   return kp;
 }
-
 async function generateSignKeysAndSave(){
   if (PREFERRED_SIG_ALG === "ECDSA-P256"){
     const kp = await crypto.subtle.generateKey({name:"ECDSA", namedCurve:"P-256"}, true, ["sign","verify"]);
@@ -60,7 +60,6 @@ async function generateSignKeysAndSave(){
     localStorage.setItem(SIGN_PRIV, ab2b64(priv));
     return {alg:"ECDSA-P256", kp};
   }
-  // fallback Ed25519
   const kp = await crypto.subtle.generateKey({name:"Ed25519"}, true, ["sign","verify"]);
   const pub = await crypto.subtle.exportKey("raw", kp.publicKey);
   const priv= await crypto.subtle.exportKey("pkcs8", kp.privateKey);
@@ -69,7 +68,6 @@ async function generateSignKeysAndSave(){
   localStorage.setItem(SIGN_PRIV, ab2b64(priv));
   return {alg:"Ed25519", kp};
 }
-
 async function importMySignKeysFromStorage(){
   const alg = localStorage.getItem(SIGN_ALG);
   const pubB64 = localStorage.getItem(SIGN_PUB);
@@ -81,7 +79,6 @@ async function importMySignKeysFromStorage(){
   const priv= await crypto.subtle.importKey("pkcs8", b642ab(privB64), params, true, ["sign"]);
   return {alg, pub, priv};
 }
-
 async function fetchPeerKeys(userId){
   const js = await (await fetch("/api/pubkey?user_id="+encodeURIComponent(userId))).json();
   if (!js.pub) throw new Error("Peer has no encryption key");
@@ -104,7 +101,6 @@ async function fetchPeerKeys(userId){
   }
   return { encPub, encFp, signKey, signFp, signAlg };
 }
-
 function signingParams(alg){ return (alg==="Ed25519") ? "Ed25519" : {name:"ECDSA", hash:"SHA-256"}; }
 function normalizeAlg(alg){ return (alg && alg.toLowerCase().includes("ecdsa")) ? "ECDSA-P256" : alg; }
 function signPreimage(m){
@@ -125,6 +121,10 @@ async function deriveKeyFromPass(pass, salt, iter=BACKUP_ITER){
   const km = await crypto.subtle.importKey("raw", utf8(pass), "PBKDF2", false, ["deriveKey"]);
   return crypto.subtle.deriveKey({name:"PBKDF2", hash:"SHA-256", salt, iterations:iter}, km, {name:"AES-GCM", length:256}, false, ["encrypt","decrypt"]);
 }
+function getNickMap(){ try{ return JSON.parse(localStorage.getItem(NICKS_KEY)||"{}"); }catch{ return {}; } }
+function saveNickMap(m){ localStorage.setItem(NICKS_KEY, JSON.stringify(m)); }
+function nameFor(id){ const n=getNickMap()[id]; return n && n.trim() ? n : id; }
+
 function snapshotIdentity(){
   const pins={};
   for(let i=0;i<localStorage.length;i++){
@@ -138,7 +138,8 @@ function snapshotIdentity(){
     sign_alg:localStorage.getItem(SIGN_ALG)||null,
     sign_pub:localStorage.getItem(SIGN_PUB)||null,
     sign_priv:localStorage.getItem(SIGN_PRIV)||null,
-    pins
+    pins,
+    nicknames: getNickMap()
   };
 }
 function restoreSnapshot(o){
@@ -148,6 +149,7 @@ function restoreSnapshot(o){
   localStorage.setItem(KEY_PRIV,o.enc_priv);
   if(o.sign_alg && o.sign_pub && o.sign_priv){ localStorage.setItem(SIGN_ALG,o.sign_alg); localStorage.setItem(SIGN_PUB,o.sign_pub); localStorage.setItem(SIGN_PRIV,o.sign_priv); }
   for(const peer in (o.pins||{})){ localStorage.setItem(PIN_PREFIX+peer, JSON.stringify(o.pins[peer])); }
+  if(o.nicknames) saveNickMap(o.nicknames);
 }
 async function exportIdentity(pass){
   if(!pass || pass.length<8) throw new Error("Use a longer passphrase.");
@@ -176,6 +178,30 @@ async function importIdentity(file, pass){
 function loadPin(peer){ const raw=localStorage.getItem(PIN_PREFIX+peer); return raw?JSON.parse(raw):null; }
 function savePin(peer,pin){ localStorage.setItem(PIN_PREFIX+peer, JSON.stringify(pin)); }
 
+// ================== Notifications ==================
+function toast(msg){
+  const t=$("#toast"); if(!t) return;
+  t.textContent=msg; t.style.display="block";
+  clearTimeout(toast._tmr); toast._tmr=setTimeout(()=>{ t.style.display="none"; }, 2200);
+}
+function beep(){
+  try{
+    const ctx = new (window.AudioContext||window.webkitAudioContext)();
+    const o=ctx.createOscillator(), g=ctx.createGain(); o.type="sine"; o.frequency.value=880;
+    o.connect(g); g.connect(ctx.destination);
+    g.gain.value=0.0001; g.gain.exponentialRampToValueAtTime(0.05, ctx.currentTime+0.01);
+    o.start();
+    setTimeout(()=>{ g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime+0.15); o.stop(ctx.currentTime+0.18); ctx.close(); }, 180);
+  }catch{}
+}
+function notifyNewMessage(fromId, preview){
+  if(localStorage.getItem(NOTIF_SOUND)==="1") beep();
+  toast(`New message from ${nameFor(fromId)}`);
+  if (localStorage.getItem(NOTIF_DESKTOP)==="1" && "Notification" in window && Notification.permission==="granted" && document.hidden){
+    try{ new Notification("Onion DM", { body: `${nameFor(fromId)}: ${preview}` }); }catch{}
+  }
+}
+
 // ================== UI state ==================
 const state = {
   me: localStorage.getItem("myId") || null,
@@ -186,7 +212,8 @@ const state = {
   myEncPriv: null, myEncPub: null,
   mySignAlg: null, mySignPriv: null, mySignPub: null,
   peerEncPub: null, peerEncFp: null,
-  peerSignPub: null, peerSignFp: null, peerSignAlg: null
+  peerSignPub: null, peerSignFp: null, peerSignAlg: null,
+  unread: {} // id -> count
 };
 let seen = new Set();
 
@@ -194,38 +221,65 @@ let seen = new Set();
 const sidebar = $("#sidebar");
 const backdrop = $("#backdrop");
 const menuBtn = $("#btnToggleSidebar");
-function openDrawer(){
-  sidebar.classList.add("open");
-  backdrop.classList.add("show");
-  menuBtn.setAttribute("aria-expanded","true");
-}
-function closeDrawer(){
-  sidebar.classList.remove("open");
-  backdrop.classList.remove("show");
-  menuBtn.setAttribute("aria-expanded","false");
-}
-menuBtn?.addEventListener("click", ()=> {
-  if (sidebar.classList.contains("open")) closeDrawer(); else openDrawer();
-});
+function openDrawer(){ sidebar.classList.add("open"); backdrop.classList.add("show"); menuBtn.setAttribute("aria-expanded","true"); }
+function closeDrawer(){ sidebar.classList.remove("open"); backdrop.classList.remove("show"); menuBtn.setAttribute("aria-expanded","false"); }
+menuBtn?.addEventListener("click", ()=> { if (sidebar.classList.contains("open")) closeDrawer(); else openDrawer(); });
 backdrop?.addEventListener("click", closeDrawer);
 
 // ================== Sidebar & Chat UI helpers ==================
+function setComposerEnabled(on){
+  $("#btnSend").disabled = !on;
+  const input=$("#msgInput");
+  input.disabled = !on;
+  input.placeholder = on ? "Type a message... (Enter to send, Shift+Enter = newline)" : "Verify & Trust this key to chat";
+}
+
 function drawContacts(){
   const list=$("#contactsList"); list.innerHTML="";
   state.contacts.forEach(id=>{
-    const d=document.createElement("div"); d.className="contact"+(id===state.peer?" active":"");
-    const span=document.createElement("div"); span.className="grow"; span.textContent=id; d.appendChild(span);
-    d.addEventListener("click",()=>{ openThread(id); closeDrawer(); });
-    list.appendChild(d);
+    const row=document.createElement("div"); row.className="contact"+(id===state.peer?" active":"");
+    const label=document.createElement("div"); label.className="grow"; label.textContent=nameFor(id); row.appendChild(label);
+
+    const cnt = state.unread[id]||0;
+    if(cnt>0){ const b=document.createElement("span"); b.className="count"; b.textContent = cnt>99 ? "99+" : String(cnt); row.appendChild(b); }
+
+    const actions=document.createElement("div"); actions.className="actions";
+    const edit=document.createElement("button"); edit.className="iconbtn"; edit.title="Set nickname"; edit.textContent="✎";
+    edit.addEventListener("click",(ev)=>{ ev.stopPropagation();
+      const m=getNickMap(); const cur=m[id]||""; const name=prompt(`Set nickname for ${id}`, cur);
+      if(name===null) return; const trimmed=(name||"").trim(); if(trimmed) { m[id]=trimmed; } else { delete m[id]; }
+      saveNickMap(m); drawContacts(); if(state.peer===id) $("#peerLabel").textContent=nameFor(id);
+    });
+    const del=document.createElement("button"); del.className="iconbtn warn"; del.title="Delete contact"; del.textContent="🗑";
+    del.addEventListener("click", async (ev)=>{ ev.stopPropagation();
+      if(!confirm(`Remove contact ${nameFor(id)}?`)) return;
+      try{
+        await api("/api/remove_contact",{owner_id:state.me, contact_id:id});
+        if(state.peer===id){ state.peer=null; $("#thread").innerHTML=""; setChatVisible(false); }
+        await refreshContacts();
+      }catch{ alert("Failed to remove contact."); }
+    });
+    actions.appendChild(edit); actions.appendChild(del);
+    row.appendChild(actions);
+
+    row.addEventListener("click",()=>{ openThread(id); closeDrawer(); });
+    list.appendChild(row);
   });
 }
 async function refreshContacts(){
   if(!state.me) return;
-  try{ const r=await api("/api/contacts?user_id="+encodeURIComponent(state.me)); state.contacts=r.contacts||[]; drawContacts(); }catch{}
+  try{
+    const r=await api("/api/contacts?user_id="+encodeURIComponent(state.me));
+    state.contacts=r.contacts||[];
+    // ensure unread map has keys
+    state.contacts.forEach(id=>{ if(state.unread[id]==null) state.unread[id]=0; });
+    drawContacts();
+  }catch{}
 }
 function setChatVisible(on){
   $("#noChat").classList.toggle("hidden", on);
   $("#chatHeader").classList.toggle("hidden", !on);
+  setComposerEnabled(on && ($("#keyBadge").classList.contains("ok")));
 }
 function setKeyUI(){
   if(!state.peer) return;
@@ -236,10 +290,10 @@ function setKeyUI(){
 
   const pinned=loadPin(state.peer);
   const match = pinned && pinned.enc_fp===state.peerEncFp && pinned.sig_fp===(state.peerSignFp||null) && pinned.sig_alg===(state.peerSignAlg||null);
-  const badge=$("#keyBadge"), trust=$("#btnTrustKey"), send=$("#btnSend");
-  if(match){ badge.textContent="Key pinned ✓"; badge.className="pill ok"; badge.classList.remove("hidden"); trust.classList.add("hidden"); send.disabled=false; }
-  else if(pinned){ badge.textContent="Key changed!"; badge.className="pill warn"; badge.classList.remove("hidden"); trust.classList.remove("hidden"); send.disabled=true; }
-  else { badge.textContent="Untrusted key"; badge.className="pill warn"; badge.classList.remove("hidden"); trust.classList.remove("hidden"); send.disabled=true; }
+  const badge=$("#keyBadge"), trust=$("#btnTrustKey");
+  if(match){ badge.textContent="Key pinned ✓"; badge.className="pill ok"; badge.classList.remove("hidden"); trust.classList.add("hidden"); setComposerEnabled(true); }
+  else if(pinned){ badge.textContent="Key changed!"; badge.className="pill warn"; badge.classList.remove("hidden"); trust.classList.remove("hidden"); setComposerEnabled(false); }
+  else { badge.textContent="Untrusted key"; badge.className="pill warn"; badge.classList.remove("hidden"); trust.classList.remove("hidden"); setComposerEnabled(false); }
 }
 function appendBubble(m,text,sigOk,sigAlg){
   const wrap=document.createElement("div"); wrap.className="bubble "+(m.from===state.me?"me":"them");
@@ -248,13 +302,13 @@ function appendBubble(m,text,sigOk,sigAlg){
   const tag=(sigOk===true)?"✓ signed":(sigOk===false)?"⚠ invalid sig":(m.sig?"sig unsupported":"unsigned");
   meta.textContent=`${new Date(m.ts).toLocaleString()} • ${tag}${m.sig && sigAlg? " ("+sigAlg+")":""}`;
   wrap.appendChild(body); wrap.appendChild(meta); $("#thread").appendChild(wrap);
-  // Auto-scroll on mobile after each message
   const th=$("#thread"); th.scrollTop=th.scrollHeight;
 }
 
 // ================== Long-poll & processing ==================
 function cancelPolling(){ if(state.pollAbort){ state.pollAbort.abort(); state.pollAbort=null; } }
 async function processMessages(items){
+  let gotNew=false, notifyInfo=null;
   for(const m of items){
     if(m.id!=null && seen.has(m.id)) continue;
     let sigOk=null;
@@ -278,7 +332,16 @@ async function processMessages(items){
     } else if (m.body){ text=m.body+" (legacy)"; }
     appendBubble(m,text,sigOk,m.sig_alg);
     if(m.id!=null) seen.add(m.id); state.lastId=m.id||state.lastId;
+
+    // unread + notifications
+    if(m.from!==state.me){
+      if(state.peer!==m.from || document.hidden){
+        state.unread[m.from]=(state.unread[m.from]||0)+1;
+        gotNew=true; notifyInfo={from:m.from, text:text.slice(0,64)};
+      }
+    }
   }
+  if(gotNew){ drawContacts(); if(notifyInfo) notifyNewMessage(notifyInfo.from, notifyInfo.text); }
 }
 async function longPollThread(){
   if(!state.me || !state.peer) return;
@@ -311,12 +374,15 @@ async function signUpFlow(){
 
 async function openThread(peerId){
   state.peer=peerId; state.lastId=null; seen.clear();
-  $("#peerLabel").textContent=peerId; $("#thread").innerHTML=""; setChatVisible(true); cancelPolling();
+  $("#peerLabel").textContent=nameFor(peerId); $("#thread").innerHTML=""; setChatVisible(true); cancelPolling();
 
   try{
     const {encPub,encFp,signKey,signFp,signAlg}=await fetchPeerKeys(peerId);
     state.peerEncPub=encPub; state.peerEncFp=encFp; state.peerSignPub=signKey; state.peerSignFp=signFp||null; state.peerSignAlg=signAlg||null;
   }catch{ alert("Peer has not signed up (missing keys)."); return; }
+
+  // clearing unread for this peer
+  state.unread[peerId]=0; drawContacts();
 
   setKeyUI();
 
@@ -399,6 +465,14 @@ $("#btnSend").addEventListener("click", async ()=>{
   }catch(e){ console.error(e); alert("Send failed"); }
 });
 
+// Enter-to-send (Shift+Enter = newline)
+$("#msgInput").addEventListener("keydown", e=>{
+  if(e.key==="Enter" && !e.shiftKey){
+    e.preventDefault();
+    if(!$("#btnSend").disabled) $("#btnSend").click();
+  }
+});
+
 // Export/Import (sidebar)
 $("#btnExport").addEventListener("click", async ()=>{ try{ await exportIdentity($("#backupPass").value.trim()); }catch(e){ alert("Export failed: "+(e.message||e)); } });
 $("#btnImport").addEventListener("click", async ()=>{ try{
@@ -408,6 +482,28 @@ $("#btnImport").addEventListener("click", async ()=>{ try{
   state.me=localStorage.getItem("myId"); $("#myId").textContent=state.me; $("#userBadge").textContent="Signed in as "+state.me; refreshContacts();
   closeDrawer();
 }catch(e){ alert("Import failed: "+(e.message||e)); }});
+
+// Notifications toggles
+(function notifInit(){
+  const desk=$("#toggleDesktop"), snd=$("#toggleSound");
+  if(desk){ desk.checked = localStorage.getItem(NOTIF_DESKTOP)==="1";
+    desk.addEventListener("change", async ()=>{
+      if(desk.checked){
+        if(!("Notification" in window)){ alert("This browser does not support desktop notifications."); desk.checked=false; return; }
+        if(Notification.permission!=="granted"){
+          const p=await Notification.requestPermission();
+          if(p!=="granted"){ desk.checked=false; return; }
+        }
+        localStorage.setItem(NOTIF_DESKTOP,"1");
+      }else{
+        localStorage.removeItem(NOTIF_DESKTOP);
+      }
+    });
+  }
+  if(snd){ snd.checked = localStorage.getItem(NOTIF_SOUND)==="1";
+    snd.addEventListener("change", ()=>{ if(snd.checked) localStorage.setItem(NOTIF_SOUND,"1"); else localStorage.removeItem(NOTIF_SOUND); });
+  }
+})();
 
 // ================== Boot ==================
 (async function init(){

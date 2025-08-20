@@ -34,6 +34,7 @@
       padding:12px 14px; font-size:14px; outline:none; min-height:44px;
     }
     input::placeholder{color:#74809a}
+    input:disabled, button:disabled{opacity:.55; cursor:not-allowed}
     button{cursor:pointer}
     .btn{background:#171c35}
     .btn.primary{background:linear-gradient(180deg, var(--accent) 0%, var(--accent-2) 100%); border-color:#6e8bff; color:white}
@@ -41,6 +42,8 @@
     .btn.ok{background:#143023; border-color:#1d5136; color:#9ef3b8}
     .btn.warn{background:#2a140e; border-color:#4a2415; color:#ffb69a}
     .copy{font-size:12px}
+    .iconbtn{background:#0c1030;border:1px solid #202446;border-radius:10px;padding:6px 8px;min-height:auto}
+    .iconbtn.warn{background:#2a1511;border-color:#4d291f}
 
     /* Cards / layout primitives */
     .card{
@@ -84,11 +87,15 @@
     .shell{display:grid; grid-template-columns:320px 1fr; gap:18px; width:100%; max-width:1200px}
     .sidebar{display:flex; flex-direction:column; gap:18px}
     .section{display:flex; flex-direction:column; gap:10px}
-    .list{display:flex; flex-direction:column; gap:8px; max-height:calc(100vh - 56px - 18px - 18px - 260px); overflow:auto}
-    .contact{display:flex; justify-content:space-between; align-items:center; gap:10px; padding:12px 12px;
-      border:1px solid #22284a; border-radius:12px; background:#0e142a; cursor:pointer}
+    .list{display:flex; flex-direction:column; gap:8px; max-height:calc(100vh - 56px - 18px - 18px - 320px); overflow:auto}
+    .contact{
+      display:flex; align-items:center; gap:8px; padding:12px 12px; cursor:pointer;
+      border:1px solid #22284a; border-radius:12px; background:#0e142a;
+    }
     .contact.active{outline:2px solid var(--accent)}
     .grow{flex:1}
+    .count{background:#244; border:1px solid #335; color:#cfe6ff; padding:2px 6px; border-radius:999px; font-size:12px}
+    .contact .actions{display:flex; gap:6px}
 
     /* Chat panel */
     .chat{display:flex; flex-direction:column; gap:14px; min-height:calc(100vh - 56px - 56px)}
@@ -107,6 +114,10 @@
     .pill.warn{background:#2a1511; color:#ffb19b; border-color:#4d291f}
     .mini{font-size:12px; color:var(--muted)}
     #fpRow{overflow:auto; white-space:nowrap}
+
+    /* Toast */
+    #toast{position:fixed; left:50%; transform:translateX(-50%); bottom:18px; z-index:50;
+      background:#0f1430; border:1px solid #2a2e46; color:#e9ecf1; padding:10px 14px; border-radius:12px; box-shadow:var(--shadow); display:none}
 
     /* Mobile responsive (Bootstrap-ish breakpoints) */
     @media (max-width: 992px){
@@ -226,6 +237,18 @@
         </div>
 
         <div class="card section">
+          <div class="muted">Notifications</div>
+          <label class="row" style="justify-content:space-between">
+            <span>Desktop notifications</span>
+            <input id="toggleDesktop" class="shrink" type="checkbox"/>
+          </label>
+          <label class="row" style="justify-content:space-between">
+            <span>Sound on new message</span>
+            <input id="toggleSound" class="shrink" type="checkbox"/>
+          </label>
+        </div>
+
+        <div class="card section">
           <div class="muted">Backup & restore</div>
           <div class="row">
             <input id="backupPass" type="password" placeholder="Export passphrase"/>
@@ -269,13 +292,15 @@
         <div id="thread" class="thread"></div>
 
         <div class="composer">
-          <input id="msgInput" placeholder="Type a message..."/>
+          <input id="msgInput" placeholder="Type a message... (Enter to send, Shift+Enter = newline)"/>
           <button id="btnSend" class="btn primary">Send</button>
         </div>
       </div>
     </div>
   </div>
 </section>
+
+<div id="toast" role="status" aria-live="polite"></div>
 
 </body>
 </html>
