@@ -4,3 +4,5 @@ data/
 docs/
 
 tor/
+
+.tor_site_runtime/

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'unsafe-inline' 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Onion DM (E2EE)</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body{margin:0;font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#0c0d10;color:#e7e7ea}
+    header{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;background:#12131a;border-bottom:1px solid #222}
+    .brand{font-weight:700;letter-spacing:.3px}
+    main{display:grid;grid-template-columns:280px 1fr;gap:0;height:calc(100vh - 56px)}
+    aside{border-right:1px solid #222;background:#0e0f14;display:flex;flex-direction:column}
+    .section{padding:12px 14px;border-bottom:1px solid #191a22}
+    .muted{color:#9aa0a6;font-size:12px}
+    .row{display:flex;gap:8px;align-items:center}
+    input,button,textarea{background:#151723;border:1px solid #2a2c39;color:#e7e7ea;border-radius:10px;padding:10px 12px;font-size:14px;outline:none}
+    button{cursor:pointer}
+    button.primary{background:#2a6bff;border-color:#3a75ff;color:white}
+    .idBox{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:#131520;border:1px dashed #2a2c39;border-radius:10px;padding:10px 12px;font-size:14px;overflow:auto}
+    .list{padding:8px 10px;display:flex;flex-direction:column;gap:8px;overflow:auto}
+    .contact{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:10px 12px;border:1px solid #232536;border-radius:12px;background:#131520;cursor:pointer}
+    .contact.active{outline:2px solid #2a6bff}
+    .grow{flex:1}
+    .chat{display:flex;flex-direction:column;height:100%}
+    .thread{flex:1;overflow:auto;padding:18px 20px;display:flex;flex-direction:column;gap:10px}
+    .bubble{max-width:72ch;padding:10px 12px;border-radius:14px;border:1px solid #222;word-wrap:break-word;white-space:pre-wrap}
+    .me{align-self:flex-end;background:#1d2030}
+    .them{align-self:flex-start;background:#12141e}
+    .timestamp{font-size:11px;color:#9aa0a6;margin-top:4px}
+    .composer{border-top:1px solid #222;padding:10px 14px;display:flex;gap:8px}
+    .hidden{display:none}
+    .copy{font-size:12px;margin-left:8px}
+    .pill{background:#1b1e2b;color:#b8c1ff;border:1px solid #2a2c39;border-radius:999px;padding:4px 8px;font-size:12px}
+  </style>
+  <script src="app.js" defer></script>
+</head>
+<body>
+<header>
+  <div class="brand">🧅 Onion DM</div>
+  <div id="userBadge" class="muted"></div>
+</header>
+
+<main>
+  <aside>
+    <div class="section">
+      <div id="signupView">
+        <div class="muted" style="margin-bottom:8px">No account yet</div>
+        <button id="btnSignup" class="primary" style="width:100%">Sign up</button>
+      </div>
+      <div id="meView" class="hidden">
+        <div class="muted">Your ID</div>
+        <div class="row" style="margin-top:6px">
+          <div id="myId" class="idBox grow"></div>
+          <button id="copyId" class="copy">Copy</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="contactsPanel" class="section hidden">
+      <div class="muted">Add contact by ID</div>
+      <div class="row" style="margin-top:8px">
+        <input id="contactId" placeholder="Enter ID"/>
+        <button id="btnAddContact">Add</button>
+      </div>
+    </div>
+
+    <div class="list" id="contactsList"></div>
+  </aside>
+
+  <section class="chat">
+    <div id="emptyState" class="thread" style="align-items:center;justify-content:center;color:#9aa0a6">
+      <div style="text-align:center">
+        <div style="font-size:24px;margin-bottom:6px">Welcome to Onion DM</div>
+        <div>Sign up to get your ID. Share that ID so others can add you.</div>
+      </div>
+    </div>
+
+    <div id="chatView" class="hidden chat">
+      <div class="section" style="display:flex;align-items:center;gap:8px">
+        <span class="muted">Chat with</span>
+        <span class="pill" id="peerLabel"></span>
+      </div>
+      <div class="thread" id="thread"></div>
+      <div class="composer">
+        <input id="msgInput" placeholder="Type a message..." />
+        <button id="btnSend" class="primary">Send</button>
+      </div>
+    </div>
+  </section>
+</main>
+</body>
+</html>
