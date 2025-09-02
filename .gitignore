@@ -1,8 +1,16 @@
+# Sensitive local data / backups
+oniondm-identity-*.json
 
-data/
-
-docs/
-
-tor/
-
+# Tor runtime state
 .tor_site_runtime/
+tor.log
+
+# Large vendor archives
+tor-expert-bundle-*.tar.gz
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+

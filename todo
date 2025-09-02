@@ -1,10 +1,11 @@
-[ ] Group DMs
+[x] Group DMs
 [x] Contact nicknames
 [x] Delete contacts
 [/] Some notification?
-[ ] Images/files upload
+[x] Images/files upload
 [x] Enter to send (keybind)
+[x] View images/videos in browser
 [x] Gray out type-box and send-button when not key is trusted (until trust is clicked)
 [ ] Call/voice?
 [ ] Mobile app (somehow on Iphone?)
-[ ] Copy ID button (next to rename and delete)
+[x] Copy ID button (next to rename and delete)
